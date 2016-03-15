@@ -77,22 +77,38 @@ class S3Client(FileSystem):
                  **kwargs):
         # only import boto when needed to allow top-lvl s3 module import
         import boto
+        import boto.s3.connection
         from boto.s3.key import Key
 
         options = self._get_s3_config()
         options.update(kwargs)
         # Removing key args would break backwards compability
-        if not aws_access_key_id:
-            aws_access_key_id = options.get('aws_access_key_id')
-        if not aws_secret_access_key:
-            aws_secret_access_key = options.get('aws_secret_access_key')
-        for key in ['aws_access_key_id', 'aws_secret_access_key']:
-            if key in options:
-                options.pop(key)
+        role_arn = options.get('aws_role_arn')
+        role_session_name = options.get('aws_role_session_name')
 
-        self.s3 = boto.connect_s3(aws_access_key_id,
-                                  aws_secret_access_key,
-                                  **options)
+        aws_session_token = None
+
+        if role_arn and role_session_name:
+            import boto
+            from boto import sts
+
+            sts_client = sts.STSConnection()
+            assumed_role = sts_client.assume_role(role_arn, role_session_name)
+            aws_secret_access_key = assumed_role.credentials.secret_key
+            aws_access_key_id = assumed_role.credentials.access_key
+            aws_session_token = assumed_role.credentials.session_token
+
+        else:
+            if not aws_access_key_id:
+                aws_access_key_id = options.get('aws_access_key_id')
+
+            if not aws_secret_access_key:
+                aws_secret_access_key = options.get('aws_secret_access_key')
+
+        for key in ['aws_access_key_id', 'aws_secret_access_key','aws_role_session_name','aws_role_arn']:
+           if key in options:
+              options.pop(key)
+        self.s3 = boto.s3.connection.S3Connection(aws_access_key_id,aws_secret_access_key,security_token=aws_session_token,**options)
         self.Key = Key
 
     def exists(self, path):
@@ -509,6 +525,7 @@ class S3Client(FileSystem):
             raise MissingParentDirectory()
 
         return self.put_string("", self._add_path_delimiter(path))
+
 
     def _get_s3_config(self, key=None):
         try:
